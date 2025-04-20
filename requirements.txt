@@ -1,0 +1,5 @@
+tensorflow>=2.10.0
+picamera2>=0.3.6
+numpy>=1.23.5
+Pillow>=9.4.0
+RPi.GPIO>=0.7.1
