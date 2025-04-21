@@ -1,12 +1,10 @@
 import time
+import cv2
 import RPi.GPIO as GPIO
-from picamera2 import Picamera2
 from datetime import datetime
 import os
 import numpy as np
 import tensorflow as tf
-from PIL import Image
-import psutil
 
 # Disable TensorFlow logging
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -26,13 +24,6 @@ plant_list = ['Apple___Apple_scab', 'Apple___Black_rot', 'Apple___Cedar_apple_ru
               'Tomato___Target_Spot', 'Tomato___Tomato_Yellow_Leaf_Curl_Virus',
               'Tomato___Tomato_mosaic_virus', 'Tomato___healthy']
 
-# Function to check memory usage
-def log_memory_usage():
-    process = psutil.Process()
-    mem_info = process.memory_info()
-    print(f"Memory Usage: RSS={mem_info.rss / 1024**2:.2f}MB, VMS={mem_info.vms / 1024**2:.2f}MB")
-    sys_mem = psutil.virtual_memory()
-    print(f"System Memory: Free={sys_mem.free / 1024**2:.2f}MB, Total={sys_mem.total / 1024**2:.2f}MB")
 
 # ============== MODEL SETUP =============
 model_path = 'model2.tflite'
@@ -42,7 +33,6 @@ try:
     interpreter.allocate_tensors()
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
-    log_memory_usage()
 except Exception as e:
     print(f"Error loading TFLite model: {e}")
     exit(1)
@@ -50,8 +40,9 @@ except Exception as e:
 # ============== USER CONFIGURATIONS =============
 RELAY_GPIO_PIN = 18
 PUMP_ON_DURATION = 5
-IMAGE_SAVE_FOLDER = "./captured_images"  # Changed to local folder for simplicity
-IMAGE_CAPTURE_INTERVAL = 5  # Increased to reduce memory pressure
+IMAGE_SAVE_FOLDER = "./captured_images"
+IMAGE_CAPTURE_INTERVAL = 5
+CAMERA_INDEX = 0  # Default camera (0 for Pi Camera or USB webcam)
 
 # ============== HARDWARE SETUP =============
 try:
@@ -59,26 +50,20 @@ try:
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(RELAY_GPIO_PIN, GPIO.OUT, initial=GPIO.LOW)
     time.sleep(0.5)
-    log_memory_usage()
 except Exception as e:
     print(f"Error setting up GPIO: {e}")
     exit(1)
 
 # ============== CAMERA SETUP =============
 try:
-    print("Setting up camera...")
-    picam2 = Picamera2()
-    config = picam2.create_still_configuration(
-        main={"size": (224, 224), "format": "RGB888"},
-        buffer_count=1,  # Reduced buffer count
-        queue=False,
-        display=None
-    )
-    picam2.configure(config)
-    picam2.set_controls({"AwbEnable": True, "FrameDurationLimits": (50000, 50000)})  # Slower frame rate
-    picam2.start()
-    time.sleep(2)
-    log_memory_usage()
+    print("Setting up OpenCV camera...")
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    if not cap.isOpened():
+        raise Exception("Failed to open camera")
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 224)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 224)
+    cap.set(cv2.CAP_PROP_FPS, 15)  # Lower FPS to reduce load
+    time.sleep(2)  # Camera warm-up
 except Exception as e:
     print(f"Error setting up camera: {e}")
     exit(1)
@@ -86,9 +71,12 @@ except Exception as e:
 # ============== IMAGE PROCESSING =============
 def preprocess_image(image_array):
     try:
-        # Convert to float32 and normalize to [-1, 1]
+        # Ensure RGB format (OpenCV uses BGR by default)
+        image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
+        # Convert to float32 and normalize to [-1, 1] for MobileNetV2
         img_array = image_array.astype(np.float32)
         img_array = img_array / 127.5 - 1.0
+        # Expand dimensions to match model input shape (1, 224, 224, 3)
         img_array = np.expand_dims(img_array, axis=0)
         return img_array
     except Exception as e:
@@ -119,16 +107,20 @@ def main():
     try:
         while True:
             print("Starting capture cycle...")
-            log_memory_usage()
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             image_path = os.path.join(IMAGE_SAVE_FOLDER, f"img_{timestamp}.jpg")
             
-            # Capture image directly to array to avoid disk I/O
+            # Capture image
             try:
-                image_array = picam2.capture_array()
-                # Save image
-                Image.fromarray(image_array).save(image_path)
+                ret, frame = cap.read()
+                if not ret:
+                    print("Failed to capture frame")
+                    continue
+                # Resize to 224x224
+                frame = cv2.resize(frame, (224, 224))
+                # Save image (convert BGR to RGB for saving)
+                cv2.imwrite(image_path, frame)
                 print(f"Captured: {image_path}")
             except Exception as e:
                 print(f"Error capturing image: {e}")
@@ -136,7 +128,7 @@ def main():
             
             # Classify image
             try:
-                predicted_class, confidence = classify_image(image_array)
+                predicted_class, confidence = classify_image(frame)
                 if predicted_class is None:
                     print("Skipping due to classification error")
                     continue
@@ -154,13 +146,13 @@ def main():
                 continue
             
             # Clear memory
-            image_array = None
+            frame = None
             time.sleep(IMAGE_CAPTURE_INTERVAL)
 
     except KeyboardInterrupt:
         print("Exiting...")
     finally:
-        picam2.close()
+        cap.release()
         GPIO.cleanup()
 
 if __name__ == "__main__":
