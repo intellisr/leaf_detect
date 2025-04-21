@@ -50,8 +50,13 @@ GPIO.setup(RELAY_GPIO_PIN, GPIO.OUT, initial=GPIO.LOW)
 
 # ============== SETUP CAMERA =============
 picam2 = Picamera2()
-config = picam2.create_still_configuration(main={"size": (640, 480)})
+config = picam2.create_still_configuration(
+    main={"size": (224, 224)},  # Match model input size
+    buffer_count=4,  # Reduce memory usage
+    queue=False
+)
 picam2.configure(config)
+picam2.set_controls({"AwbEnable": True, "FrameRate": 15})
 picam2.start()
 
 # Create folder to save images if it doesn't exist
