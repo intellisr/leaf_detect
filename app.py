@@ -3,12 +3,12 @@ import RPi.GPIO as GPIO
 from picamera2 import Picamera2
 from datetime import datetime
 import os
-import tensorflow as tf
-from tensorflow.keras.applications import MobileNetV2
-from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
-from tensorflow.keras.models import Model
-from tensorflow.keras.preprocessing import image
 import numpy as np
+from tflite_runtime.interpreter import Interpreter
+from PIL import Image
+
+# Disable TensorFlow GPU usage
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 plant_list = ['Apple___Apple_scab', 'Apple___Black_rot', 'Apple___Cedar_apple_rust', 'Apple___healthy', 
               'Cherry_(including_sour)___Powdery_mildew', 'Cherry_(including_sour)___healthy', 
@@ -24,98 +24,84 @@ plant_list = ['Apple___Apple_scab', 'Apple___Black_rot', 'Apple___Cedar_apple_ru
               'Tomato___Target_Spot', 'Tomato___Tomato_Yellow_Leaf_Curl_Virus',
               'Tomato___Tomato_mosaic_virus', 'Tomato___healthy']
 
-# Model setup
-base_model = MobileNetV2(weights=None, include_top=False, input_shape=(224, 224, 3))
-x = base_model.output
-x = GlobalAveragePooling2D()(x)
-x = Dense(1024, activation='relu')(x)
-predictions = Dense(35, activation='softmax')(x)
-model = Model(inputs=base_model.input, outputs=predictions)
-
-# Load the weights
-model.load_weights('Plant_Disease_Detection.weights.h5')
+# ============== MODEL SETUP =============
+interpreter = Interpreter(model_path='model_quant.tflite', num_threads=4)
+interpreter.allocate_tensors()
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
 
 # ============== USER CONFIGURATIONS =============
-# GPIO and Relay Configuration
-RELAY_GPIO_PIN = 18  # BCM pin you connected the relay to
-PUMP_ON_DURATION = 5  # seconds
-
-# Camera Configuration
+RELAY_GPIO_PIN = 18
+PUMP_ON_DURATION = 5
 IMAGE_SAVE_FOLDER = "../captured_images"
-IMAGE_CAPTURE_INTERVAL = 2  # seconds (time between captures)
+IMAGE_CAPTURE_INTERVAL = 2
 
-# ============== SETUP GPIO =============
+# ============== HARDWARE SETUP =============
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RELAY_GPIO_PIN, GPIO.OUT, initial=GPIO.LOW)
+time.sleep(0.5)  # GPIO stabilization delay
 
-# ============== SETUP CAMERA =============
+# ============== CAMERA SETUP =============
 picam2 = Picamera2()
 config = picam2.create_still_configuration(
-    main={"size": (224, 224)},  # Match model input size
-    buffer_count=4,  # Reduce memory usage
-    queue=False
+    main={"size": (224, 224)},
+    buffer_count=2,
+    queue=False,
+    display=None
 )
 picam2.configure(config)
-picam2.set_controls({"AwbEnable": True, "FrameRate": 15})
+picam2.set_controls({"AwbEnable": True, "FrameDurationLimits": (40000, 40000)})
 picam2.start()
+time.sleep(2)  # Camera warm-up
 
-# Create folder to save images if it doesn't exist
-if not os.path.exists(IMAGE_SAVE_FOLDER):
-    os.makedirs(IMAGE_SAVE_FOLDER)
+# ============== IMAGE PROCESSING =============
+def load_image(image_path):
+    img = Image.open(image_path).resize((224, 224))
+    img_array = np.array(img, dtype=np.uint8)
+    return np.expand_dims(img_array, axis=0)
 
-# ============== CLASSIFICATION FUNCTION =============
-def classify_image(image_path: str) -> str:
-    """    
-    Return a predicted class label as string.
-    """
-    img = image.load_img(image_path, target_size=(224, 224))
-    img_array = image.img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0)
-    img_array /= 255.0
-    
-    # Make a prediction
-    predictions = model.predict(img_array)
-
-    # Get the class label with the highest predicted probability
-    predicted_class_index = np.argmax(predictions[0])
-    predicted_class_label = plant_list[predicted_class_index]
-
-    print(f"Predicted class: {predicted_class_label}")
-    
-    return predicted_class_label
+def classify_image(image_path):
+    input_data = load_image(image_path)
+    interpreter.set_tensor(input_details[0]['index'], input_data)
+    interpreter.invoke()
+    predictions = interpreter.get_tensor(output_details[0]['index'])
+    return plant_list[np.argmax(predictions[0])]
 
 # ============== MAIN LOOP =============
-try:
-    while True:
-        # 1. Capture image
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        image_filename = f"img_{timestamp}.jpg"
-        image_path = os.path.join(IMAGE_SAVE_FOLDER, image_filename)
-        
-        picam2.capture_file(image_path)
-        print(f"[INFO] Captured image: {image_path}")
+def main():
+    if not os.path.exists(IMAGE_SAVE_FOLDER):
+        os.makedirs(IMAGE_SAVE_FOLDER)
 
-        # 2. Classify the image
-        predicted_class = classify_image(image_path)
-        print(f"[INFO] Predicted Class: {predicted_class}")
+    try:
+        while True:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            image_path = os.path.join(IMAGE_SAVE_FOLDER, f"img_{timestamp}.jpg")
+            
+            # Capture and process
+            picam2.capture_file(image_path)
+            print(f"Captured: {image_path}")
+            
+            try:
+                prediction = classify_image(image_path)
+                print(f"Prediction: {prediction}")
+                
+                if "healthy" not in prediction:
+                    print(f"Activating pump for {PUMP_ON_DURATION}s")
+                    GPIO.output(RELAY_GPIO_PIN, GPIO.HIGH)
+                    time.sleep(PUMP_ON_DURATION)
+                    GPIO.output(RELAY_GPIO_PIN, GPIO.LOW)
+                
+            except Exception as e:
+                print(f"Processing error: {str(e)}")
+                continue
+            
+            time.sleep(IMAGE_CAPTURE_INTERVAL)
 
-        # 3. Conditional logic to turn on the relay
-        # IMPORTANT: Replace "Tomato___healthy" with the actual class you want to trigger watering
-        if "healthy" not in predicted_class:  # Example: water if plant is not healthy
-            print(f"[ACTION] {predicted_class} detected. Turning on water pump.")
-            GPIO.output(RELAY_GPIO_PIN, GPIO.HIGH)
-            time.sleep(PUMP_ON_DURATION)
-            GPIO.output(RELAY_GPIO_PIN, GPIO.LOW)
-            print("[ACTION] Water pump turned off.")
-        
-        # Sleep until next capture
-        time.sleep(IMAGE_CAPTURE_INTERVAL)
+    except KeyboardInterrupt:
+        print("Exiting...")
+    finally:
+        picam2.close()
+        GPIO.cleanup()
 
-except KeyboardInterrupt:
-    print("[INFO] Exiting script.")
-except Exception as e:
-    print(f"[ERROR] An unexpected error occurred: {e}")
-finally:
-    # 4. Cleanup resources
-    picam2.close()
-    GPIO.cleanup()
+if __name__ == "__main__":
+    main()
