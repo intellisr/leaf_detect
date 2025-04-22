@@ -1,6 +1,6 @@
 ## To login using ssh
-ssh pi@pi.local
-## then enter pw :  1234
+ssh user@raspberrypi.local
+## then enter pw :  user
 
 ## virtual keyboard
 wvkbd-mobintl
@@ -8,16 +8,19 @@ wvkbd-mobintl
 ## check camera 
 rpicam-still -o ~/Desktop/image.jpg
 
+# fix steps
 
-pip install --pre --extra-index-url https://snapshots.linaro.org/ldcg/python-cache/tensorflow/ tensorflow-aarch64
+### Remove existing installations
+sudo pip3 uninstall tensorflow tensorflow-aarch64 -y
+sudo apt remove python3-numpy -y
 
 sudo apt update
-sudo apt install -y python3-libcamera python3-libcamera-apps python3-opencv python3-picamera2 python3-pyqt5 python3-prctl libatlas-base-dev libopenjp2-7 libtiff5
+
+### Install compatible versions (critical for Pi 4B)
+python3 -m pip install --upgrade --no-cache-dir numpy==1.23.5 tensorflow-aarch64==2.15.0 --extra-index-url https://snapshots.linaro.org/ldcg/python-cache/
 
 pip install -r requirements.txt
 
-tensorflow>=2.10.0
-picamera2>=0.3.6
-numpy>=1.23.5
+picamera2
 Pillow>=9.4.0
 RPi.GPIO>=0.7.1
