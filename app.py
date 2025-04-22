@@ -3,154 +3,102 @@ import RPi.GPIO as GPIO
 from picamera2 import Picamera2
 from datetime import datetime
 import os
-import numpy as np
 import tensorflow as tf
-from PIL import Image
+from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
+from tensorflow.keras.models import Model
+from tensorflow.keras.preprocessing import image
+import numpy as np
 
-# Disable TensorFlow GPU usage and logging
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+plant_list = ['Not_Detected', 'Tomato_healthy', 'Tomato_unhealthy']
 
-# List of plant disease classes
-plant_list = ['Apple___Apple_scab', 'Apple___Black_rot', 'Apple___Cedar_apple_rust', 'Apple___healthy', 
-              'Cherry_(including_sour)___Powdery_mildew', 'Cherry_(including_sour)___healthy', 
-              'Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot', 'Corn_(maize)___Common_rust_', 
-              'Corn_(maize)___Northern_Leaf_Blight', 'Corn_(maize)___healthy', 'Grape___Black_rot', 
-              'Grape___Esca_(Black_Measles)', 'Grape___Leaf_blight_(Isariopsis_Leaf_Spot)', 'Grape___healthy',
-              'Orange___Haunglongbing_(Citrus_greening)', 'Orange___healthy', 'Peach___Bacterial_spot',
-              'Peach___healthy', 'Pepper,_bell___Bacterial_spot', 'Pepper,_bell___healthy',
-              'Potato___Early_blight', 'Potato___Late_blight', 'Potato___healthy',
-              'Strawberry___Leaf_scorch', 'Strawberry___healthy', 'Tomato___Bacterial_spot',
-              'Tomato___Early_blight', 'Tomato___Late_blight', 'Tomato___Leaf_Mold',
-              'Tomato___Septoria_leaf_spot', 'Tomato___Spider_mites Two-spotted_spider_mite',
-              'Tomato___Target_Spot', 'Tomato___Tomato_Yellow_Leaf_Curl_Virus',
-              'Tomato___Tomato_mosaic_virus', 'Tomato___healthy']
+# Model setup
+base_model = MobileNetV2(weights=None, include_top=False, input_shape=(224, 224, 3))
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(1024, activation='relu')(x)
+predictions = Dense(3, activation='softmax')(x)
+model = Model(inputs=base_model.input, outputs=predictions)
 
-# ============== MODEL SETUP =============
-model_path = 'model2.tflite'
-try:
-    interpreter = tf.lite.Interpreter(model_path=model_path)
-    interpreter.allocate_tensors()
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-except Exception as e:
-    print(f"Error loading TFLite model: {e}")
-    exit(1)
+# Load the weights
+model.load_weights('model.weights.h5')
 
 # ============== USER CONFIGURATIONS =============
-RELAY_GPIO_PIN = 18
-PUMP_ON_DURATION = 5
+# GPIO and Relay Configuration
+RELAY_GPIO_PIN = 18  # BCM pin you connected the relay to
+PUMP_ON_DURATION = 10  # seconds
+
+# Camera Configuration
 IMAGE_SAVE_FOLDER = "../captured_images"
-IMAGE_CAPTURE_INTERVAL = 2
+IMAGE_CAPTURE_INTERVAL = 5  # seconds (time between captures)
 
-# ============== HARDWARE SETUP =============
-try:
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(RELAY_GPIO_PIN, GPIO.OUT, initial=GPIO.LOW)
-    time.sleep(0.5)  # GPIO stabilization delay
-except Exception as e:
-    print(f"Error setting up GPIO: {e}")
-    exit(1)
+# ============== SETUP GPIO =============
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(RELAY_GPIO_PIN, GPIO.OUT, initial=GPIO.LOW)
 
-# ============== CAMERA SETUP =============
-try:
-    picam2 = Picamera2()
-    config = picam2.create_still_configuration(
-        main={"size": (224, 224)},
-        buffer_count=2,
-        queue=False,
-        display=None
-    )
-    picam2.configure(config)
-    picam2.set_controls({"AwbEnable": True, "FrameDurationLimits": (40000, 40000)})
-    picam2.start()
-    time.sleep(2)  # Camera warm-up
-except Exception as e:
-    print(f"Error setting up camera: {e}")
-    exit(1)
+# ============== SETUP CAMERA =============
+picam2 = Picamera2()
+config = picam2.create_still_configuration(main={"size": (640, 480)})
+picam2.configure(config)
+picam2.start()
 
-# ============== IMAGE PROCESSING =============
-def preprocess_image(image_path):
-    try:
-        # Load and resize image
-        img = Image.open(image_path).resize((224, 224))
-        # Convert to array and normalize to [-1, 1] for MobileNetV2
-        img_array = np.array(img, dtype=np.float32)
-        img_array = img_array / 127.5 - 1.0
-        # Expand dimensions to match model input shape (1, 224, 224, 3)
-        img_array = np.expand_dims(img_array, axis=0)
-        return img_array
-    except Exception as e:
-        print(f"Error preprocessing image: {e}")
-        return None
+# Create folder to save images if it doesn't exist
+if not os.path.exists(IMAGE_SAVE_FOLDER):
+    os.makedirs(IMAGE_SAVE_FOLDER)
 
-def classify_image(image_path):
-    input_data = preprocess_image(image_path)
-    if input_data is None:
-        return None, None
+# ============== CLASSIFICATION FUNCTION =============
+def classify_image(image_path: str) -> str:
+    """    
+    Return a predicted class label as string.
+    """
+    img = image.load_img(image_path, target_size=(224, 224))
+    img_array = image.img_to_array(img)
+    img_array = np.expand_dims(img_array, axis=0)
+    img_array /= 255.0
     
-    try:
-        # Set the input tensor
-        interpreter.set_tensor(input_details[0]['index'], input_data)
-        # Run inference
-        interpreter.invoke()
-        # Get the output tensor
-        predictions = interpreter.get_tensor(output_details[0]['index'])
-        predicted_class_idx = np.argmax(predictions[0])
-        confidence = predictions[0][predicted_class_idx] * 100
-        return plant_list[predicted_class_idx], confidence
-    except Exception as e:
-        print(f"Error during inference: {e}")
-        return None, None
+    # Make a prediction
+    predictions = model.predict(img_array)
+
+    # Get the class label with the highest predicted probability
+    predicted_class_index = np.argmax(predictions[0])
+    predicted_class_label = plant_list[predicted_class_index]
+
+    print(f"Predicted class: {predicted_class_label}")
+    
+    return predicted_class_label
 
 # ============== MAIN LOOP =============
-def main():
-    # Create image save folder if it doesn't exist
-    if not os.path.exists(IMAGE_SAVE_FOLDER):
-        os.makedirs(IMAGE_SAVE_FOLDER)
+try:
+    while True:
+        # 1. Capture image
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        image_filename = f"img_{timestamp}.jpg"
+        image_path = os.path.join(IMAGE_SAVE_FOLDER, image_filename)
+        
+        picam2.capture_file(image_path)
+        print(f"[INFO] Captured image: {image_path}")
 
-    try:
-        while True:
-            # Generate timestamped image filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            image_path = os.path.join(IMAGE_SAVE_FOLDER, f"img_{timestamp}.jpg")
-            
-            # Capture image
-            try:
-                picam2.capture_file(image_path)
-                print(f"Captured: {image_path}")
-            except Exception as e:
-                print(f"Error capturing image: {e}")
-                continue
-            
-            # Classify image
-            try:
-                predicted_class, confidence = classify_image(image_path)
-                if predicted_class is None:
-                    print("Skipping due to classification error")
-                    continue
-                
-                print(f"Prediction: {predicted_class} ({confidence:.2f}%)")
-                
-                # Activate pump if plant is not healthy
-                if "healthy" not in predicted_class.lower():
-                    print(f"Activating pump for {PUMP_ON_DURATION}s")
-                    GPIO.output(RELAY_GPIO_PIN, GPIO.HIGH)
-                    time.sleep(PUMP_ON_DURATION)
-                    GPIO.output(RELAY_GPIO_PIN, GPIO.LOW)
-                
-            except Exception as e:
-                print(f"Processing error: {e}")
-                continue
-            
-            # Wait before next capture
-            time.sleep(IMAGE_CAPTURE_INTERVAL)
+        # 2. Classify the image
+        predicted_class = classify_image(image_path)
+        print(f"[INFO] Predicted Class: {predicted_class}")
 
-    except KeyboardInterrupt:
-        print("Exiting...")
-    finally:
-        # Cleanup resources
-        picam2.close()
-        GPIO.cleanup()
+        # 3. Conditional logic to turn on the relay
+        # IMPORTANT: Replace "Tomato___healthy" with the actual class you want to trigger watering
+        if "unhealthy" not in predicted_class:  # Example: water if plant is not healthy
+            print(f"[ACTION] {predicted_class} detected. Turning on water pump.")
+            GPIO.output(RELAY_GPIO_PIN, GPIO.HIGH)
+            time.sleep(PUMP_ON_DURATION)
+            GPIO.output(RELAY_GPIO_PIN, GPIO.LOW)
+            print("[ACTION] Water pump turned off.")
+        
+        # Sleep until next capture
+        time.sleep(IMAGE_CAPTURE_INTERVAL)
 
-if __name__ == "__main__":
-    main()
+except KeyboardInterrupt:
+    print("[INFO] Exiting script.")
+except Exception as e:
+    print(f"[ERROR] An unexpected error occurred: {e}")
+finally:
+    # 4. Cleanup resources
+    picam2.close()
+    GPIO.cleanup()
