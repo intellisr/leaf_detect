@@ -34,7 +34,7 @@ IMAGE_CAPTURE_INTERVAL = 5  # seconds (time between captures)
 
 # ============== SETUP GPIO =============
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(RELAY_GPIO_PIN, GPIO.OUT, initial=GPIO.LOW)
+GPIO.setup(RELAY_GPIO_PIN, GPIO.OUT)
 
 # ============== SETUP CAMERA =============
 picam2 = Picamera2()
@@ -71,6 +71,7 @@ def classify_image(image_path: str) -> str:
 try:
     while True:
         # 1. Capture image
+        GPIO.output(RELAY_GPIO_PIN, GPIO.LOW)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         image_filename = f"img_{timestamp}.jpg"
         image_path = os.path.join(IMAGE_SAVE_FOLDER, image_filename)
@@ -96,8 +97,10 @@ try:
 
 except KeyboardInterrupt:
     print("[INFO] Exiting script.")
+    GPIO.cleanup()
 except Exception as e:
     print(f"[ERROR] An unexpected error occurred: {e}")
+    GPIO.cleanup()
 finally:
     # 4. Cleanup resources
     picam2.close()
