@@ -11,5 +11,4 @@ while True:
     GPIO.output(18, GPIO.LOW)
     print("[ACTION] Water pump turned off.")
         
-        # Sleep until next capture
     time.sleep(5)
