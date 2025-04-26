@@ -35,7 +35,7 @@ IMAGE_CAPTURE_INTERVAL = 5  # seconds (time between captures)
 # ============== SETUP GPIO =============
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RELAY_GPIO_PIN, GPIO.OUT)
-GPIO.output(RELAY_GPIO_PIN, GPIO.LOW)
+GPIO.output(RELAY_GPIO_PIN, GPIO.HIGH)
 
 # ============== SETUP CAMERA =============
 picam2 = Picamera2()
@@ -87,9 +87,9 @@ try:
         # IMPORTANT: Replace "Tomato___healthy" with the actual class you want to trigger watering
         if "unhealthy" in predicted_class:  # Example: water if plant is not healthy
             print(f"[ACTION] {predicted_class} detected. Turning on water pump.")
-            GPIO.output(RELAY_GPIO_PIN, GPIO.HIGH)
-            time.sleep(PUMP_ON_DURATION)
             GPIO.output(RELAY_GPIO_PIN, GPIO.LOW)
+            time.sleep(PUMP_ON_DURATION)
+            GPIO.output(RELAY_GPIO_PIN, GPIO.HIGH)
             print("[ACTION] Water pump turned off.")
         
         # Sleep until next capture
