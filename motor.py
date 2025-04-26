@@ -1,26 +1,38 @@
-import RPi.GPIO as GPIO
-import time
+from gpiozero import OutputDevice
+from time import sleep
+import atexit
 
-# Setup
-GPIO.setwarnings(False)
-GPIO.cleanup()
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(18, GPIO.OUT, initial=GPIO.LOW)  # Start with relay OFF
-time.sleep(1)  # Let relay stabilize
+# ===== Configuration =====
+RELAY_PIN = 18            # GPIO pin connected to the relay
+PUMP_ON_TIME = 30         # Seconds to keep the pump ON
+PUMP_OFF_TIME = 5         # Seconds to keep the pump OFF
 
+# ===== Setup =====
+relay = OutputDevice(RELAY_PIN, active_high=True, initial_value=False)
+
+# ===== Safety Cleanup =====
+def shutdown():
+    """Turn off the relay and cleanup on exit."""
+    print("Script stopped! Ensuring relay is OFF.")
+    relay.off()
+
+atexit.register(shutdown)  # Run on normal/forced exit
+
+# ===== Main Loop =====
 try:
+    print("Starting water pump control script...")
     while True:
-        GPIO.output(18, GPIO.HIGH)  # Relay ON → pump ON
-        print("[ACTION] Water pump turned ON (GPIO 18 HIGH).")
-        time.sleep(30)  # Run for 30 seconds
+        relay.on()  # Activate relay → pump ON
+        print(f"Pump ON for {PUMP_ON_TIME} seconds")
+        sleep(PUMP_ON_TIME)
 
-        GPIO.output(18, GPIO.LOW)  # Relay OFF → pump OFF
-        print("[ACTION] Water pump turned OFF (GPIO 18 LOW).")
-        time.sleep(5)  # Pause for 5 seconds
+        relay.off()  # Deactivate relay → pump OFF
+        print(f"Pump OFF for {PUMP_OFF_TIME} seconds")
+        sleep(PUMP_OFF_TIME)
 
 except KeyboardInterrupt:
-    print("\nUser interrupted script.")
+    print("User stopped the script")
+except Exception as e:
+    print(f"CRITICAL ERROR: {e}")
 finally:
-    GPIO.output(18, GPIO.LOW)  # Force relay OFF
-    GPIO.cleanup()
-    print("GPIO cleaned up. Relay is OFF.")
+    shutdown()  # Ensure relay is OFF
