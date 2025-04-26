@@ -2,7 +2,7 @@ from gpiozero import OutputDevice
 from time import sleep
 import sys
 
-relay = OutputDevice(17, active_high=False, initial_value=True)  # Starts OFF (if active-low)
+relay = OutputDevice(15, active_high=False, initial_value=True)  # Starts OFF (if active-low)
 
 try:
     print("Starting relay test... (Ctrl+C to stop)")
