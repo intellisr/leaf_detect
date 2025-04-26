@@ -1,38 +1,19 @@
 from gpiozero import OutputDevice
 from time import sleep
-import atexit
+import sys
 
-# ===== Configuration =====
-RELAY_PIN = 18            # GPIO pin connected to the relay
-PUMP_ON_TIME = 30         # Seconds to keep the pump ON
-PUMP_OFF_TIME = 5         # Seconds to keep the pump OFF
+relay = OutputDevice(17, active_high=False, initial_value=True)  # Starts OFF (if active-low)
 
-# ===== Setup =====
-relay = OutputDevice(RELAY_PIN, active_high=True, initial_value=False)
-
-# ===== Safety Cleanup =====
-def shutdown():
-    """Turn off the relay and cleanup on exit."""
-    print("Script stopped! Ensuring relay is OFF.")
-    relay.off()
-
-atexit.register(shutdown)  # Run on normal/forced exit
-
-# ===== Main Loop =====
 try:
-    print("Starting water pump control script...")
+    print("Starting relay test... (Ctrl+C to stop)")
     while True:
-        relay.on()  # Activate relay → pump ON
-        print(f"Pump ON for {PUMP_ON_TIME} seconds")
-        sleep(PUMP_ON_TIME)
-
-        relay.off()  # Deactivate relay → pump OFF
-        print(f"Pump OFF for {PUMP_OFF_TIME} seconds")
-        sleep(PUMP_OFF_TIME)
-
+        print("Turning ON")
+        relay.on()  # Or relay.value = 1
+        sleep(2)
+        print("Turning OFF")
+        relay.off()  # Or relay.value = 0
+        sleep(2)
 except KeyboardInterrupt:
-    print("User stopped the script")
-except Exception as e:
-    print(f"CRITICAL ERROR: {e}")
-finally:
-    shutdown()  # Ensure relay is OFF
+    print("\nExiting...")
+    relay.off()  # Force OFF
+    sys.exit(0)
