@@ -26,7 +26,7 @@ model.load_weights('model.weights.h5')
 # ============== USER CONFIGURATIONS =============
 # GPIO and Relay Configuration
 RELAY_GPIO_PIN = 18  # BCM pin you connected the relay to
-PUMP_ON_DURATION = 10  # seconds
+PUMP_ON_DURATION = 15  # seconds
 
 # Camera Configuration
 IMAGE_SAVE_FOLDER = "../captured_images"
@@ -35,6 +35,7 @@ IMAGE_CAPTURE_INTERVAL = 5  # seconds (time between captures)
 # ============== SETUP GPIO =============
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RELAY_GPIO_PIN, GPIO.OUT)
+GPIO.output(RELAY_GPIO_PIN, GPIO.LOW)
 
 # ============== SETUP CAMERA =============
 picam2 = Picamera2()
@@ -71,7 +72,6 @@ def classify_image(image_path: str) -> str:
 try:
     while True:
         # 1. Capture image
-        GPIO.output(RELAY_GPIO_PIN, GPIO.LOW)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         image_filename = f"img_{timestamp}.jpg"
         image_path = os.path.join(IMAGE_SAVE_FOLDER, image_filename)
@@ -85,7 +85,7 @@ try:
 
         # 3. Conditional logic to turn on the relay
         # IMPORTANT: Replace "Tomato___healthy" with the actual class you want to trigger watering
-        if "unhealthy" not in predicted_class:  # Example: water if plant is not healthy
+        if "unhealthy" in predicted_class:  # Example: water if plant is not healthy
             print(f"[ACTION] {predicted_class} detected. Turning on water pump.")
             GPIO.output(RELAY_GPIO_PIN, GPIO.HIGH)
             time.sleep(PUMP_ON_DURATION)
